@@ -4,12 +4,19 @@ Displays data in a tabular form.
 """
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-    QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QSpacerItem, QSizePolicy
+    QWidget, QVBoxLayout, 
+    # QHBoxLayout,  # COMMENTED OUT: Not currently used, may be needed for future layouts
+    QLabel, QPushButton, 
+    QTableWidget, QTableWidgetItem, 
+    # QHeaderView,  # COMMENTED OUT: Not used as a class (only referenced in stylesheet)
+    # QScrollArea,  # COMMENTED OUT: Removed - QTableWidget handles its own scrolling now 
+    # QSpacerItem,  # COMMENTED OUT: Not currently used, may be needed for future layouts
+    QSizePolicy, QMessageBox
 )
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt
+# from PyQt6.QtCore import QSize  # COMMENTED OUT: Not currently used, may be needed for future size calculations
 import pandas as pd
+from src.ui.full_data_dialog import FullDataDialog
 
 
 class DataTableComponent:
@@ -19,6 +26,7 @@ class DataTableComponent:
         self.data = data
         self.parent = parent
         self.column_widths = self._calculate_column_widths()
+        self.full_data_dialog = None  # Keep reference to prevent garbage collection
         
     def build(self) -> tuple[QWidget, QWidget]:
         """Build the data table UI with fixed headers showing first 10 rows.
@@ -52,31 +60,8 @@ class DataTableComponent:
         # Create table widget
         table_widget = self._create_table_widget(rows_to_show)
         
-        # Wrap table in scroll area for horizontal scrolling
-        scroll_area = QScrollArea()
-        scroll_area.setWidget(table_widget)
-        scroll_area.setWidgetResizable(False)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        
-        # Calculate fixed height: header (40px) + rows (~50px each)
-        # For 10 rows: 40 + (10 * 50) + 10 = 550px
-        header_height = 40
-        row_height = 50
-        body_height = rows_to_show * row_height
-        total_table_height = header_height + body_height + 10
-        
-        scroll_area.setFixedHeight(total_table_height)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: 1px solid #616161;
-                border-radius: 10px;
-                background-color: #303030;
-            }
-        """)
-        
-        # Add scroll area to table container
-        layout.addWidget(scroll_area)
+        # Add table directly to container - let QTableWidget handle its own scrolling
+        layout.addWidget(table_widget)
         
         # Create separate container for the button
         button_container = QWidget()
@@ -103,7 +88,7 @@ class DataTableComponent:
                 background-color: #0a3d91;
             }
         """)
-        see_all_button.clicked.connect(lambda: None)  # Placeholder
+        see_all_button.clicked.connect(self._open_full_data_dialog)
         button_layout.addWidget(see_all_button, alignment=Qt.AlignmentFlag.AlignCenter)
         
         return table_container, button_container
@@ -175,6 +160,17 @@ class DataTableComponent:
         # Set selection behavior
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         
+        # Enable table's own scrollbars - let QTableWidget handle scrolling natively
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # Only horizontal scrolling needed
+        
+        # Configure horizontal scroll bar for better mouse wheel scrolling
+        # Single step: distance scrolled per wheel click (default is too small)
+        # Page step: distance scrolled when clicking scroll bar track
+        horizontal_scrollbar = table.horizontalScrollBar()
+        horizontal_scrollbar.setSingleStep(50)  # Scroll 50px per wheel notch (was ~1-2px)
+        horizontal_scrollbar.setPageStep(200)   # Scroll 200px when clicking track
+        
         # Calculate minimum width based on column widths
         total_width = sum(self.column_widths) if self.column_widths else 800
         table.setMinimumWidth(total_width)
@@ -186,13 +182,34 @@ class DataTableComponent:
         table.setMinimumHeight(table_height)
         table.setMaximumHeight(table_height)
         
-        # Set size policy to prevent the table from expanding beyond our constraints
+        # Set size policy: allow horizontal expansion but keep height fixed
         size_policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        size_policy.setHorizontalStretch(0)
+        size_policy.setHorizontalStretch(1)  # Allow horizontal stretching
         size_policy.setVerticalStretch(0)
         table.setSizePolicy(size_policy)
         
         return table
+    
+    def _open_full_data_dialog(self):
+        """Open a dialog window displaying the complete dataset."""
+        if self.data is None or self.data.empty:
+            return
+        
+        # Check if dialog is already open
+        if self.full_data_dialog is not None and self.full_data_dialog.isVisible():
+            # Show warning message
+            msg_box = QMessageBox(self.parent)
+            msg_box.setIcon(QMessageBox.Icon.Information)
+            msg_box.setWindowTitle("Dialog Already Open")
+            msg_box.setText("The Full Dataset View dialog is already open.")
+            msg_box.setInformativeText("Please use the existing window or close it before opening a new one.")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg_box.exec()
+            return
+        
+        # Create and show dialog (non-modal, so main window remains accessible)
+        self.full_data_dialog = FullDataDialog(self.data, self.parent)
+        self.full_data_dialog.show()
     
     def _calculate_column_widths(self) -> list:
         """Calculate optimal column widths based on content."""
