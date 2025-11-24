@@ -118,17 +118,32 @@ class OptimizationAnalyzer(BaseAnalyzer):
             # Get top N solutions
             top_solutions = df_sorted.head(top_n).copy()
             
-            # Select relevant columns for output
-            output_columns = input_variables + target_variables + ['_composite_score']
-            result_df = top_solutions[output_columns].copy()
+            # Include ALL columns from original data (top_solutions should have all columns from data)
+            # Get all columns in original data order, excluding _composite_score
+            data_columns = [col for col in data.columns if col != '_composite_score']
+            result_df = top_solutions[data_columns].copy()
             
-            # Add row identifier: use "pass" column if it exists, otherwise use index
-            if 'Pass' in data.columns:
-                result_df.insert(0, 'Pass', top_solutions['Pass'].values)
-            elif 'pass' in data.columns:
-                result_df.insert(0, 'Pass', top_solutions['pass'].values)
+            # Add composite score at the end
+            result_df['_composite_score'] = top_solutions['_composite_score'].values
+            
+            # Ensure Pass/Row Index is first if it exists
+            if 'Pass' in result_df.columns:
+                # Reorder: Pass first, then all other columns in original order, then composite score
+                other_cols = [col for col in data_columns if col != 'Pass']
+                cols = ['Pass'] + other_cols + ['_composite_score']
+                result_df = result_df[cols]
+            elif 'pass' in result_df.columns:
+                # Rename 'pass' to 'Pass' and ensure it's first
+                result_df = result_df.rename(columns={'pass': 'Pass'})
+                other_cols = [col for col in data_columns if col != 'pass']
+                cols = ['Pass'] + other_cols + ['_composite_score']
+                result_df = result_df[cols]
             else:
+                # No Pass column, add Row Index as first column
                 result_df.insert(0, 'Row Index', top_solutions.index)
+                # Reorder to put Row Index first, then all data columns, then composite score
+                cols = ['Row Index'] + data_columns + ['_composite_score']
+                result_df = result_df[cols]
             
             # Round numeric columns for display
             numeric_cols = result_df.select_dtypes(include=[np.number]).columns

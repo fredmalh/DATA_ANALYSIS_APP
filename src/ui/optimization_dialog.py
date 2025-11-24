@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QCheckBox, QScrollArea, QWidget, QMessageBox,
     QDoubleSpinBox, QGroupBox, QRadioButton, QButtonGroup, QFrame
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from typing import List, Dict, Any, Optional
 import pandas as pd
@@ -16,6 +16,9 @@ import pandas as pd
 
 class OptimizationDialog(QDialog):
     """Dialog for configuring optimization parameters."""
+    
+    # Signal emitted when Run Optimization is clicked (instead of closing dialog)
+    run_optimization = pyqtSignal(dict)  # Emits the configuration dict
     
     def __init__(self, data: pd.DataFrame, parent=None, saved_config: Optional[Dict[str, Any]] = None):
         """
@@ -41,10 +44,12 @@ class OptimizationDialog(QDialog):
         self.setMinimumSize(700, 800)
         self.resize(800, 900)
         
-        # Set window flags
+        # Set window flags to make it non-modal (doesn't block parent window)
         self.setWindowFlags(
             Qt.WindowType.Window |
-            Qt.WindowType.WindowCloseButtonHint
+            Qt.WindowType.WindowCloseButtonHint |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowMaximizeButtonHint
         )
         
         # Apply dark theme
@@ -353,6 +358,18 @@ class OptimizationDialog(QDialog):
             constraint_combo.setEnabled(False)
             self.constraint_combos.append(constraint_combo)
             
+            constraint_spin = QDoubleSpinBox()
+            constraint_spin.setDecimals(1)
+            constraint_spin.setRange(-1e10, 1e10)
+            constraint_spin.setEnabled(False)
+            self.constraint_spinboxes.append(constraint_spin)
+            
+            # Connect signal BEFORE setting checkbox state
+            constraint_check.toggled.connect(
+                lambda checked, combo=constraint_combo, spin=constraint_spin: 
+                self._toggle_constraint(checked, combo, spin)
+            )
+            
             # Set default values based on original requirements
             if i == 1:  # Target 2
                 constraint_check.setChecked(True)
@@ -361,7 +378,7 @@ class OptimizationDialog(QDialog):
             elif i == 2:  # Target 3
                 constraint_check.setChecked(True)
                 constraint_combo.setCurrentIndex(0)  # >
-                default_value = 1.0
+                default_value = 0.0
             elif i == 3:  # Target 4
                 constraint_check.setChecked(True)
                 constraint_combo.setCurrentIndex(0)  # >
@@ -369,17 +386,7 @@ class OptimizationDialog(QDialog):
             else:
                 default_value = 0.0
             
-            constraint_spin = QDoubleSpinBox()
             constraint_spin.setValue(default_value)
-            constraint_spin.setDecimals(1)
-            constraint_spin.setRange(-1e10, 1e10)
-            constraint_spin.setEnabled(constraint_check.isChecked())
-            self.constraint_spinboxes.append(constraint_spin)
-            
-            constraint_check.toggled.connect(
-                lambda checked, combo=constraint_combo, spin=constraint_spin: 
-                self._toggle_constraint(checked, combo, spin)
-            )
             
             constraint_row_layout.addWidget(constraint_check)
             constraint_row_layout.addWidget(constraint_combo)
@@ -540,7 +547,9 @@ class OptimizationDialog(QDialog):
             QMessageBox.warning(self, "Validation Error", error)
             return
         
-        self.accept()
+        # Emit signal with configuration instead of closing dialog
+        config = self.get_configuration()
+        self.run_optimization.emit(config)
     
     def _validate_inputs(self) -> Optional[str]:
         """Validate user inputs."""

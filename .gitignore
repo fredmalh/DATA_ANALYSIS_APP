@@ -42,3 +42,8 @@ data/
 *.xls
 *.xml
 
+# Build artifacts (already covered by build/ but adding specific ones)
+*.build/
+*.dist/
+*.onefile-build/
+

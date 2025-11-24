@@ -5,7 +5,7 @@ Dialog for displaying optimization results.
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
-    QScrollArea, QPushButton
+    QScrollArea, QPushButton, QFileDialog, QMessageBox
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -29,6 +29,7 @@ class OptimizationResultDialog(BaseAnalysisDialog):
             config: Configuration used for optimization (for back button)
         """
         self.optimization_config = config
+        self.results_df = None  # Store the reordered DataFrame for export
         super().__init__(title, result_data, parent)
     
     def _init_ui(self):
@@ -59,9 +60,31 @@ class OptimizationResultDialog(BaseAnalysisDialog):
         if self.content_widget:
             layout.addWidget(self.content_widget)
         
-        # Buttons (Back and Close)
+        # Buttons (Export, Back and Close)
         button_layout = QHBoxLayout()
         button_layout.addStretch()
+        
+        # Export to Excel button
+        if self.results_df is not None and not self.results_df.empty:
+            export_button = QPushButton("Export to Excel")
+            export_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #2e7d32;
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 8px 16px;
+                    min-height: 32px;
+                }
+                QPushButton:hover {
+                    background-color: #388e3c;
+                }
+                QPushButton:pressed {
+                    background-color: #1b5e20;
+                }
+            """)
+            export_button.clicked.connect(self._on_export_clicked)
+            button_layout.addWidget(export_button)
         
         # Back button (only show if config is available)
         if self.optimization_config:
@@ -139,14 +162,91 @@ class OptimizationResultDialog(BaseAnalysisDialog):
             scroll_area.setWidget(content_widget)
             return scroll_area
         
+        # Reorder columns to match original data order, with composite score at the end
+        reordered_df = self._reorder_columns(results_df)
+        self.results_df = reordered_df.copy()  # Store for export
+        
         # Create results table
-        results_table = self._create_results_table(results_df)
+        results_table = self._create_results_table(reordered_df)
         content_layout.addWidget(results_table)
         
         content_widget.setLayout(content_layout)
         scroll_area.setWidget(content_widget)
         
         return scroll_area
+    
+    def _reorder_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Reorder DataFrame columns to match original data order, with composite score at the end.
+        
+        Args:
+            df: Results DataFrame from optimization
+            
+        Returns:
+            DataFrame with reordered columns
+        """
+        if df is None or df.empty:
+            return df
+        
+        # Get original data column order from parent chain
+        original_columns = []
+        try:
+            from src.ui.main_window import MainWindow
+            from src.ui.optimization_dialog import OptimizationDialog
+            
+            parent = self.parent()
+            
+            # Walk up the parent chain to find MainWindow
+            # Result dialog -> Optimization dialog -> MainWindow
+            while parent:
+                if isinstance(parent, MainWindow):
+                    if parent.data is not None and not parent.data.empty:
+                        original_columns = list(parent.data.columns)
+                    break
+                # If parent is OptimizationDialog, try to get its parent
+                elif isinstance(parent, OptimizationDialog):
+                    if hasattr(parent, 'data') and parent.data is not None and not parent.data.empty:
+                        original_columns = list(parent.data.columns)
+                        break
+                # Continue walking up
+                if hasattr(parent, 'parent'):
+                    parent = parent.parent()
+                else:
+                    break
+        except Exception:
+            pass
+        
+        # Build ordered column list
+        ordered_columns = []
+        
+        # 1. Add Pass/Row Index if it exists (first column)
+        pass_col = None
+        for col in df.columns:
+            col_str = str(col).lower()
+            if col_str in ['pass', 'row index']:
+                pass_col = col
+                ordered_columns.append(col)
+                break
+        
+        # 2. Add all original data columns in their original order (if they exist in results)
+        # This ensures ALL variables from original data are included
+        if original_columns:
+            for col in original_columns:
+                # Include column if it exists in results and isn't already added
+                if col in df.columns and col not in ordered_columns and col != '_composite_score':
+                    ordered_columns.append(col)
+        
+        # 3. Add any columns in results that weren't in original data (shouldn't happen, but safety)
+        for col in df.columns:
+            if col not in ordered_columns and col != '_composite_score':
+                ordered_columns.append(col)
+        
+        # 4. Add composite score at the end
+        if '_composite_score' in df.columns:
+            ordered_columns.append('_composite_score')
+        
+        # Return DataFrame with reordered columns (this should include ALL columns from df)
+        return df[ordered_columns]
     
     def _create_results_table(self, df: pd.DataFrame) -> QTableWidget:
         """Create a table widget displaying optimization results."""
@@ -251,10 +351,8 @@ class OptimizationResultDialog(BaseAnalysisDialog):
                         saved_config=self.optimization_config
                     )
                     
-                    if config_dialog.exec() == config_dialog.DialogCode.Accepted:
-                        # Get new configuration
-                        config = config_dialog.get_configuration()
-                        
+                    # Connect signal to handle optimization run without closing dialog
+                    def on_run_optimization(config):
                         try:
                             # Run optimization again
                             from src.analysis.optimization import OptimizationAnalyzer
@@ -273,16 +371,56 @@ class OptimizationResultDialog(BaseAnalysisDialog):
                             # Add config to result_data for back button
                             result_data['config'] = config
                             
-                            # Display new results
+                            # Display new results (non-modal)
                             from src.ui.analysis_factory import AnalysisDialogFactory
                             result_dialog = AnalysisDialogFactory.create_dialog(
                                 title="Optimization Results",
                                 result_data=result_data,
                                 result_type='optimization',
-                                parent=main_window
+                                parent=config_dialog  # Parent to optimization dialog
                             )
-                            result_dialog.show()
+                            result_dialog.show()  # Non-modal - doesn't block optimization dialog
                             
                         except Exception as e:
                             main_window._show_error(f"Error during optimization: {str(e)}")
+                    
+                    config_dialog.run_optimization.connect(on_run_optimization)
+                    config_dialog.show()  # Show non-modal - doesn't block result dialog
+    
+    def _on_export_clicked(self):
+        """Handle export to Excel button click."""
+        if self.results_df is None or self.results_df.empty:
+            QMessageBox.warning(self, "Export Error", "No data to export.")
+            return
+        
+        # Open file dialog to select save location
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export to Excel",
+            "optimization_results.xlsx",
+            "Excel Files (*.xlsx);;All Files (*)"
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        try:
+            # Ensure .xlsx extension
+            if not file_path.endswith('.xlsx'):
+                file_path += '.xlsx'
+            
+            # Export DataFrame to Excel
+            self.results_df.to_excel(file_path, index=False, engine='openpyxl')
+            
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"Results exported successfully to:\n{file_path}"
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Error",
+                f"Failed to export to Excel:\n{str(e)}"
+            )
 

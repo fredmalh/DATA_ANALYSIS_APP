@@ -705,13 +705,11 @@ class MainWindow(QMainWindow):
             )
             return
         
-        # Open optimization configuration dialog
+        # Open optimization configuration dialog (non-modal)
         dialog = OptimizationDialog(self.data, self)
         
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            # Get configuration
-            config = dialog.get_configuration()
-            
+        # Connect signal to handle optimization run without closing dialog
+        def on_run_optimization(config):
             try:
                 # Create analyzer instance
                 analyzer = OptimizationAnalyzer()
@@ -730,17 +728,20 @@ class MainWindow(QMainWindow):
                 # Add config to result_data for back button functionality
                 result_data['config'] = config
                 
-                # Display results using factory
+                # Display results using factory (non-modal)
                 result_dialog = AnalysisDialogFactory.create_dialog(
                     title="Optimization Results",
                     result_data=result_data,
                     result_type='optimization',
-                    parent=self
+                    parent=dialog  # Parent to optimization dialog, not main window
                 )
-                result_dialog.show()
+                result_dialog.show()  # Non-modal - doesn't block optimization dialog
                 
             except Exception as e:
                 self._show_error(f"Error during optimization: {str(e)}")
+        
+        dialog.run_optimization.connect(on_run_optimization)
+        dialog.show()  # Show non-modal - doesn't block main window
     
     def _on_analysis_clicked(self, analysis_num: int):
         """Handle analysis button click (placeholder for future implementation)."""
